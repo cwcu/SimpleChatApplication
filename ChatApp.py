@@ -1,3 +1,9 @@
+'''
+CSEE4119 Programming Assignment 1
+Chenqi Wang
+cw3277
+'''
+
 import sys
 import json
 import time
@@ -33,8 +39,11 @@ class Server:
 		self.serverSocket.bind(('', serverPort)) # '' -> '127.0.0.1'?
 
 		while True:
+			self.serverSocket.settimeout(None) # put the socket in blocking mode
 			message, clientAddress = self.serverSocket.recvfrom(4096)
 			message = json.loads(message.decode())
+			if message[0] == 1: # 1: ack
+				self.ack = True
 			if message[0] == 3: # 3: client registration request
 				name = message[1]				
 				IP = clientAddress[0]
@@ -55,6 +64,10 @@ class Server:
 			elif message[0] == 7: # 7: client log-back request
 				name = message[1]
 				self.logBackClient(name)
+			elif message[0] == 10: # 10: channel message
+				name = message[1]
+				msg = message[2]
+				self.handleChannelMessage(name, msg)
 			else:
 				pass
 
@@ -93,7 +106,8 @@ class Server:
 					while line:
 						offlineMessages.append(line)
 						line = f.readline()
-
+					offlineMessages[-1] += '\n>>> '
+					
 					IP = self.table[name]['IP']
 					port = self.table[name]['port']
 					self.serverSocket.sendto(json.dumps([9, offlineMessages]).encode(), 
@@ -109,7 +123,23 @@ class Server:
 		self.table[name]['status'] = 'yes'
 		self.broadcast()
 
+	def checkStatusRequest(self, name):
+		IP = self.table[name]['IP']
+		port = self.table[name]['port']
+		self.ack = False
+		self.serverSocket.sendto(json.dumps([12]).encode(), (IP, port))	# check status request 
+		time.sleep(0.5)
+		if self.ack:
+			return True
+		else:
+			return False
+
 	def saveMessage(self, name, message, requestName):
+		'''
+		name: name of the intended recipient of message
+		requestName: name of the client that sends the save-message request
+		'''
+
 		if name not in self.table.keys():
 			# print(<error message>) 
 			# return ?
@@ -121,22 +151,93 @@ class Server:
 		sourceIP = self.table[requestName]['IP']
 		sourcePort = self.table[requestName]['port']
 
-		if self.table[name]['status'] == 'yes':
+		if self.table[name]['status'] == 'no':
+			fileName = name + '.txt'
+			with open(fileName, 'a') as f:  
+				savedMessage = '>>> ' + requestName + ': ' + str(time.time()) + ' ' + message + '\n'
+				f.write(savedMessage)
+
+			self.serverSocket.sendto(json.dumps([1]).encode(), (sourceIP, sourcePort)) # ack
+		elif self.checkStatusRequest(name):
+			# the intended recipient is online
 			self.serverSocket.sendto(json.dumps([8, name, self.table]).encode(), (sourceIP, sourcePort)) # save-message error message
 		else:
+			# offline
 			self.table[name]['status'] = 'no'
 			self.broadcast()
 
 			fileName = name + '.txt'
 			with open(fileName, 'a') as f:  
-				savedMessage = requestName + ': ' + str(time.time()) + ' ' + message + '\n'
+				savedMessage = '>>> ' + requestName + ': ' + str(time.time()) + ' ' + message + '\n'
 				f.write(savedMessage)
 
 			self.serverSocket.sendto(json.dumps([1]).encode(), (sourceIP, sourcePort)) # ack
 
-	def __del__(self):
-		# delete all saved message files?
-		pass
+	def receiveACKs(self):
+		'''
+		For channel message, the server needs to receive acks from 
+		all online clients (except the sender). This is the method 
+		that listens to those acks.
+		'''
+
+		self.serverSocket.settimeout(0.5) 
+
+		try:
+			while True:
+				message, clientAddress = self.serverSocket.recvfrom(4096)
+				message = json.loads(message.decode())
+				if message[0] == 1: # message = [1, <name>], name of the client that sends ack
+					name = message[1]
+					# what if name not in self.acks.keys()?
+					self.acks[name] = True
+		except:
+			pass
+
+		self.serverSocket.settimeout(None) # put the socket in blocking mode 
+
+	def handleChannelMessage(self, senderName, message):
+		senderIP = self.table[senderName]['IP']
+		senderPort = self.table[senderName]['port']
+		self.serverSocket.sendto(json.dumps([1]).encode(), (senderIP, senderPort)) # ack		
+
+		self.acks = {} # {<name> : <ack>}
+
+		# create a listening thread to receive acks from all online clients
+		self.listenThread = threading.Thread(target = self.receiveACKs) 
+		self.listenThread.daemon = True
+		self.listenThread.start()
+
+		for name, clientInfo in self.table.items():
+			if name == senderName:
+				continue
+
+			IP = clientInfo['IP']
+			port = clientInfo['port']
+			if clientInfo['status'] == 'yes':
+				# online
+				channelMessage = 'Channel Message ' + senderName + ': ' + message + '\n>>> '
+				self.acks[name] = False
+				self.serverSocket.sendto(json.dumps([11, channelMessage]).encode(), (IP, port)) 		
+			else:
+				# offline
+				fileName = name + '.txt'
+				with open(fileName, 'a') as f:  
+					savedMessage = '>>> ' + 'Channel Message ' + senderName + ': ' + str(time.time()) + ' ' + message + '\n'	
+					f.write(savedMessage)				
+
+		time.sleep(0.5)
+		
+		for name, ack in self.acks.items():
+			if not ack:
+				if not self.checkStatusRequest(name):
+					# the intended recipient is offline
+					self.table[name]['status'] = 'no'
+					self.broadcast()
+
+					fileName = name + '.txt'
+					with open(fileName, 'a') as f:  
+						savedMessage = '>>> ' + 'Channel Message ' + senderName + ': ' + str(time.time()) + ' ' + message + '\n'	
+						f.write(savedMessage)	
 
 class Client:
 
@@ -171,12 +272,14 @@ class Client:
 				command = command.split(' ')
 				self.shift = False # when a command is typed in and enter 'return', we get to a new line, so no '>>>' at the beginning
 				if command[0] == 'send':
-					self.send(command[1], command[2])
+					self.send(command[1], ' '.join(command[2:]))
 				elif command[0] == 'dereg':
 					self.deregistration(command[1])
 				elif command[0] == 'reg':
 					self.logBack(command[1])
-		else: # registration request rejected
+				elif command[0] == 'send_all':
+					self.sendAll(' '.join(command[1:]))
+		else: # registration request rejected - register with same name
 			pass
 
 	def listen(self):
@@ -185,6 +288,7 @@ class Client:
 			message = json.loads(message.decode())
 
 			if message[0] == 0: # message type 0: ordinary message from another client
+				print(message[1] + '\n>>> ', end = '')
 				# send back ack
 				self.clientSocket.sendto(json.dumps([1]).encode(), (sourceAddress[0], sourceAddress[1]))
 			elif message[0] == 1: # ack
@@ -202,9 +306,14 @@ class Client:
 			elif message[0] == 9: # message type 9: offline messages
 				offlineMessages = message[1]
 				for line in offlineMessages:
-					print(line + '>>> ', end = '')
+					print(line, end = '')
+			elif message[0] == 11: # 11: channel message from server to a client
+				channelMessage = message[1]
+				print(channelMessage, end = '')
+				# send an ack to the server
+				self.clientSocket.sendto(json.dumps([1, self.name]).encode(), (self.serverIP, self.serverPort))				
 			else: # other message types to be implemented
-				pass		
+				pass
 
 	# client notified leave 
 
@@ -226,7 +335,7 @@ class Client:
 
 		if self.table[name]['status'] == 'no':
 			# the recipient is offline (exit via notified leave)
-
+			print(f'>>> [No ACK from {name}, message sent to server.]')
 			self.saveMessageRequest(name, message)
 			return
 
@@ -283,6 +392,26 @@ class Client:
 			raise Exception("invalid name for log-back")
 
 		self.clientSocket.sendto(json.dumps([7, name]).encode(), (self.serverIP, self.serverPort)) # 7: client log-back request		
+
+	def sendAll(self, message):
+		self.ack = False
+		self.clientSocket.sendto(json.dumps([10, self.name, message]).encode(), (self.serverIP, self.serverPort)) # 10: group chat message			
+		time.sleep(0.5)
+
+		if self.ack:
+			print('>>> [Message received by Server.]')
+			return
+		else:
+			# receive no ack, retry 5 times
+			for i in range(5):
+				self.clientSocket.sendto(json.dumps([10, self.name, message]).encode(), (self.serverIP, self.serverPort)) # 10: group chat message	
+				time.sleep(0.5)
+				if self.ack:
+					print('>>> [Message received by Server.]')
+					return
+
+		print('>>> [Server not responding.]')
+
 
 	def __del__(self):
 		'''

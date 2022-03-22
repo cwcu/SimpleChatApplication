@@ -29,7 +29,7 @@ message is in the format of [\<type\>, \<message\>, \<name\>, \<table\>, ...]
 \<type\> =
 
 - 0: ordinary message. e.g. [0, "Hello"]
-- 1: ack, where in this case the message = [1], i.e. no \<message\> part
+- 1: ack. [1, \<name\> (optional)], when in channel message, the client sends an ack to the server, its name also be included in the message. Except this case, the message is just [1].
 - 2: a table with information of clients. [2, \<table\>]
 - 3: client registration request. [3, \<name\>]
 - 4: client registration request rejected. [4] 
@@ -38,4 +38,7 @@ message is in the format of [\<type\>, \<message\>, \<name\>, \<table\>, ...]
 - 7: client log-back request. [7, \<name\>]
 - 8: save-message error message from the server. [8, \<name\>, \<table\>], where \<name\> is the name of the intended recipient.
 - 9: offline messages. [9, \<offline messages\>]
+- 10: group chat message (i.e. channel message) from a client to the server. [10, \<sender name\>, \<message\>]
+- 11: channel message from server to a client. [11, \<channel message\>]
+- 12: check status request. [12]
 
