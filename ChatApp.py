@@ -1,5 +1,5 @@
 '''
-CSEE4119 Programming Assignment 1
+CSEE4119 Programming Assignment 1 - Simple Chat Application
 Chenqi Wang
 cw3277
 '''
@@ -11,6 +11,11 @@ import threading
 from socket import *
 
 def checkIP(IP):
+	'''
+	check whether IP is in the format of a.b.c.d, and 
+	each of a, b, c, d is an integer in the range of [0, 255] 
+	that contains no leading zeros.
+	'''
 
 	x = IP.split('.')
 	if len(x) == 4:
@@ -19,24 +24,37 @@ def checkIP(IP):
 				# x[i] in [0, 255] and can't contain leading zeros
 				continue
 			else:
-				raise Exception("Invalid IP address")
+				print('>>> invalid IP address')
+				sys.exit()
 	else:
-		raise Exception("Invalid IP address")
+		print('>>> invalid IP address')
+		sys.exit()
 
 def checkPort(port):
+	'''
+	check whether port is in the range of [1024, 65535].
+	'''
+	
 	if 1024 <= port and port <= 65535:
 		pass
 	else:
-		raise Exception("Assigned port out of the range 1024-65535")        
+		print('>>> assigned port out of the range 1024-65535')
+		sys.exit()      
 
 class Server:
 
 	def __init__(self, serverPort):
+		'''
+		Create an UDP socket to receive requests or ack from clients, 
+		and call relative methods to handle them. The server can also 
+		use the UDP socket to send messages.
+		'''
+
 		checkPort(serverPort)
 		self.serverPort = serverPort
 		self.table = {} # { <name> : {'IP' : <IP>, 'port' : <port>, 'name' : <name>, 'status' : <status>} }
 		self.serverSocket = socket(AF_INET, SOCK_DGRAM) # ipv4, UDP
-		self.serverSocket.bind(('', serverPort)) # '' -> '127.0.0.1'?
+		self.serverSocket.bind(('', serverPort)) # '' represents INADDR_ANY: bind to all interfaces. For a server, you typically want to bind to all interfaces - not just "localhost".
 
 		while True:
 			self.serverSocket.settimeout(None) # put the socket in blocking mode
@@ -68,7 +86,7 @@ class Server:
 				name = message[1]
 				msg = message[2]
 				self.handleChannelMessage(name, msg)
-			else:
+			else: # other message types, simply do nothing
 				pass
 
 	def broadcast(self):
@@ -84,14 +102,22 @@ class Server:
 				self.serverSocket.sendto(json.dumps([2, self.table]).encode(), (IP, port)) # type 2 message: table
 
 	def addClient(self, name, IP, port):
-		# check duplicate client name -> error
+		'''
+		register a client in the table, and broadcast the table.
+		'''
+		if name in self.table.keys():
+			# client registers with a duplicate name
+			self.serverSocket.sendto(json.dumps([4]).encode(), (IP, port)) # 4: registration rejection		
+			return
+
 		self.table.update({name : {'IP' : IP, 'port' : port, 'name' : name, 'status' : 'yes'}})
 		self.broadcast()
 
 	def logBackClient(self, name):
-		if name not in self.table.keys():
-			raise Exception("invalid name for client log-back")
-
+		'''
+		log back a client, send offline messages if there are, 
+		change the client's status in the table to be online, and broadcast the new table.
+		'''
 		fileName = name + '.txt'
 		try:
 			offlineMessages = ['You Have Messages\n']
@@ -106,8 +132,8 @@ class Server:
 					while line:
 						offlineMessages.append(line)
 						line = f.readline()
-					offlineMessages[-1] += '\n>>> '
-					
+					offlineMessages[-1] += '>>> '
+
 					IP = self.table[name]['IP']
 					port = self.table[name]['port']
 					self.serverSocket.sendto(json.dumps([9, offlineMessages]).encode(), 
@@ -124,6 +150,9 @@ class Server:
 		self.broadcast()
 
 	def checkStatusRequest(self, name):
+		'''
+		send a request to a client to check whether it's active (online) or not.
+		'''
 		IP = self.table[name]['IP']
 		port = self.table[name]['port']
 		self.ack = False
@@ -136,17 +165,11 @@ class Server:
 
 	def saveMessage(self, name, message, requestName):
 		'''
-		name: name of the intended recipient of message
-		requestName: name of the client that sends the save-message request
+		when the intended recipient is offline, the server save the messages in the corresponding file.
+
+		:name: name of the intended recipient of message
+		:requestName: name of the client that sends the save-message request
 		'''
-
-		if name not in self.table.keys():
-			# print(<error message>) 
-			# return ?
-			raise Exception("nonexistent client") 
-
-		if requestName not in self.table.keys():
-			raise Exception("save-message request sent from nonexistent client")
 
 		sourceIP = self.table[requestName]['IP']
 		sourcePort = self.table[requestName]['port']
@@ -177,7 +200,8 @@ class Server:
 		'''
 		For channel message, the server needs to receive acks from 
 		all online clients (except the sender). This is the method 
-		that listens to those acks.
+		that listens to those acks. We create an individual listening 
+		thread to run this method.
 		'''
 
 		self.serverSocket.settimeout(0.5) 
@@ -188,7 +212,6 @@ class Server:
 				message = json.loads(message.decode())
 				if message[0] == 1: # message = [1, <name>], name of the client that sends ack
 					name = message[1]
-					# what if name not in self.acks.keys()?
 					self.acks[name] = True
 		except:
 			pass
@@ -196,6 +219,12 @@ class Server:
 		self.serverSocket.settimeout(None) # put the socket in blocking mode 
 
 	def handleChannelMessage(self, senderName, message):
+		'''
+ 		handle channel message. Send the message to all online clients (except the sender), 
+ 		and save the message for all offline messages. For clients that does not send back 
+ 		an ack, first check their status. If inactive (offline), update and broadcast the 
+ 		table, and then save the message in the corresponding files.
+		'''
 		senderIP = self.table[senderName]['IP']
 		senderPort = self.table[senderName]['port']
 		self.serverSocket.sendto(json.dumps([1]).encode(), (senderIP, senderPort)) # ack		
@@ -242,6 +271,12 @@ class Server:
 class Client:
 
 	def __init__(self, name, serverIP, serverPort, port):
+		'''
+		Create an UDP socket to send and receive messages, try to complete 
+		the registration. And if the registration is successful, create a 
+		listening thread that is responsible for receiving incoming messages, 
+		so the main thread can handle user inputs simultaneously. 
+		'''
 		checkIP(serverIP)
 		checkPort(serverPort)
 		checkPort(port)
@@ -258,12 +293,12 @@ class Client:
 		message, serverAddress = self.clientSocket.recvfrom(4096)
 		message = json.loads(message.decode())
 		if message[0] == 2: # message type 2: updated table
-			print('>>> [Welcome, You are registered.]')		
+			print('>>> Welcome, You are registered.')		
 			self.table = message[1]
-			print('>>> [Client table updated.]')	
+			print('>>> Client table updated.')	
 
 			self.listenThread = threading.Thread(target = self.listen) # create the listening thread
-			self.listenThread.daemon = True
+			self.listenThread.daemon = True # daemon = True, so the listening thread would be automatically terminated when the process ends
 			self.listenThread.start()
 
 			while True:
@@ -280,29 +315,39 @@ class Client:
 				elif command[0] == 'send_all':
 					self.sendAll(' '.join(command[1:]))
 		else: # registration request rejected - register with same name
-			pass
+			print(f'>>> Registration request rejected - name {name} used')
+			sys.exit()
 
 	def listen(self):
+		'''
+ 		the listening thread runs this method, to listen to incoming messages and handle them appropriately.
+		'''
+
 		while True:
 			message, sourceAddress = self.clientSocket.recvfrom(4096)	
 			message = json.loads(message.decode())
 
 			if message[0] == 0: # message type 0: ordinary message from another client
+				# if client is offline
 				print(message[1] + '\n>>> ', end = '')
 				# send back ack
 				self.clientSocket.sendto(json.dumps([1]).encode(), (sourceAddress[0], sourceAddress[1]))
 			elif message[0] == 1: # ack
 				self.ack = True
 			elif message[0] == 2: # message type 2: updated table	
+				# if receive an updated table when offline (via notified leave), no update would be made
+				if self.table[self.name]['status'] == 'no':
+					continue
+
 				self.table = message[1]
 				if self.shift:
-					print('[Client table updated.]\n>>> ', end = '')
+					print('Client table updated.\n>>> ', end = '')
 				else: 
-					print('>>> [Client table updated.]')
+					print('>>> Client table updated.')
 			elif message[0] == 8: # message type 8: save-message error message
-				print(f'>>> [Client {message[1]} exists!!]')
+				print(f'>>> Client {message[1]} exists!!')
 				self.table = message[2]
-				print('>>> [Client table updated.]')
+				print('>>> Client table updated.')
 			elif message[0] == 9: # message type 9: offline messages
 				offlineMessages = message[1]
 				for line in offlineMessages:
@@ -312,10 +357,11 @@ class Client:
 				print(channelMessage, end = '')
 				# send an ack to the server
 				self.clientSocket.sendto(json.dumps([1, self.name]).encode(), (self.serverIP, self.serverPort))				
-			else: # other message types to be implemented
-				pass
-
-	# client notified leave 
+			elif message[0] == 12: # 12: check status request
+				# if notified leave, wouldn't receive a check status request
+				self.clientSocket.sendto(json.dumps([1]).encode(), (self.serverIP, self.serverPort))
+			else: # other message types, simply do nothing
+				pass	
 
 	def send(self, name, message):
 		'''
@@ -330,39 +376,49 @@ class Client:
 		'''
 
 		if name not in self.table.keys():
-			# exception -> print error message after '>>> '  
-			raise Exception("target client doesn't exist")
+			print('>>> nonexistent intended recipient')
+			return
 
 		if self.table[name]['status'] == 'no':
 			# the recipient is offline (exit via notified leave)
-			print(f'>>> [No ACK from {name}, message sent to server.]')
+			print(f'>>> No ACK from {name}, message sent to server.')
 			self.saveMessageRequest(name, message)
+			return
+
+		if name == self.name:
+			# send message to the client itself
+			print('>>> ' + self.name + ': ' + message)
 			return
 
 		IP = self.table[name]['IP']
 		port = self.table[name]['port']
 		self.ack = False
-		self.clientSocket.sendto(json.dumps([0, message]).encode(), (IP, port)) # message type 0: ordinary message
+		self.clientSocket.sendto(json.dumps([0, self.name + ': ' + message]).encode(), (IP, port)) # message type 0: ordinary message 	
 		try:
 			time.sleep(0.5) # sleep for 500 msec
 			if self.ack:
-				print(f'>>> [Message received by {name}.]\n', end = '')
+				print(f'>>> Message received by {name}.\n', end = '')
 			else:
 				raise Exception()
 		except:
 			# timeout, send the message to server
-			print(f'>>> [No ACK from {name}, message sent to server.]')
+			print(f'>>> No ACK from {name}, message sent to server.')
 			self.saveMessageRequest(name, message)
 
 	def deregistration(self, name):
+		'''
+		notified leave. Send the de-registration request to the server and except an ack, if timeout, retry for 5 times.
+		'''
+
 		if name != self.name:
-			raise Exception("invalid name for de-registration")
+			print(f'>>> invalid name for de-registration, should be {self.name}')
+			return
 
 		self.ack = False
 		self.clientSocket.sendto(json.dumps([6, name]).encode(), (self.serverIP, self.serverPort)) # 6: de-registration request
 		time.sleep(0.5) # the listening thread is expecting an ack from the server
 		if self.ack: 
-			print('>>> [You are Offline. Bye.]\n', end = '')
+			print('>>> You are Offline. Bye.\n', end = '')
 			return
 		else:
 			# didn't receive an ack, retry for 5 times
@@ -370,36 +426,61 @@ class Client:
 				self.clientSocket.sendto(json.dumps([6, name]).encode(), (self.serverIP, self.serverPort))	
 				time.sleep(0.5)
 				if self.ack:
-					print('>>> [You are Offline. Bye.]\n', end = '')
+					print('>>> You are Offline. Bye.\n', end = '')
 					return
 
-		print('>>> [Server not responding]\n>>> [Exiting]', end = '')
-		self.clientSocket.close()
+		print('>>> Server not responding\n>>> Exiting')
 		sys.exit()
 
 	def saveMessageRequest(self, name, message):
+		'''
+		save-message request. Send the request to the server and except an ack, if timeout, retry for 5 times.
+		'''
 		self.ack = False
 		self.clientSocket.sendto(json.dumps([5, message, name, self.name]).encode(), 
-			(self.serverIP, self.serverPort)) # type 5: message	for the server to save		
+			(self.serverIP, self.serverPort)) # type 5: save message request	
 		# wait for 500 msec by default
 		time.sleep(0.5)
 		if self.ack:
-			print('>>> [Messages received by the server and saved]')
-		# what if unsuccessful save-message request, other than the recipient is online?
+			print('>>> Messages received by the server and saved')
+			return
+		else:
+			# retry 5 times
+			for i in range(5):
+				self.clientSocket.sendto(json.dumps([5, message, name, self.name]).encode(), 
+					(self.serverIP, self.serverPort)) # type 5: save message request	
+				time.sleep(0.5)				
+
+				if self.ack:
+					print('>>> Messages received by the server and saved')
+					return
+
+		print('>>> Server not responding\n>>> Exiting')
+		sys.exit()
 
 	def logBack(self, name):
+		'''
+		If the client exited via notified leave, it can log back by sending a log-back request to the server.
+		'''
 		if name != self.name:
-			raise Exception("invalid name for log-back")
+			print('>>> invalid name for log-back')
+			return
 
 		self.clientSocket.sendto(json.dumps([7, name]).encode(), (self.serverIP, self.serverPort)) # 7: client log-back request		
 
 	def sendAll(self, message):
+		'''
+		channel message - group chat. Send the channel message 
+		to the server and the server would handel it appropriately. 
+		It also excepts an ack from the server, if timeout, retry for 5 times.
+		'''
+
 		self.ack = False
 		self.clientSocket.sendto(json.dumps([10, self.name, message]).encode(), (self.serverIP, self.serverPort)) # 10: group chat message			
 		time.sleep(0.5)
 
 		if self.ack:
-			print('>>> [Message received by Server.]')
+			print('>>> Message received by Server.')
 			return
 		else:
 			# receive no ack, retry 5 times
@@ -407,25 +488,23 @@ class Client:
 				self.clientSocket.sendto(json.dumps([10, self.name, message]).encode(), (self.serverIP, self.serverPort)) # 10: group chat message	
 				time.sleep(0.5)
 				if self.ack:
-					print('>>> [Message received by Server.]')
+					print('>>> Message received by Server.')
 					return
 
-		print('>>> [Server not responding.]')
+		print('>>> Server not responding.')
 
 
-	def __del__(self):
-		'''
-		handle keyboardexception -> 
-		client silent leave
-		'''
-		self.clientSocket.close()
-		print(">>> [Silent leave.]")
-
-
-if sys.argv[1][1] == 's':
-	server = Server(int(sys.argv[2]))
-elif sys.argv[1][1] == 'c':
-	client = Client(sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]))
-else: 
-	raise Exception("Invalid mode argument")
+if __name__ == '__main__':
+	try: 
+		if sys.argv[1][1] == 's':
+			server = Server(int(sys.argv[2]))
+		elif sys.argv[1][1] == 'c':
+			client = Client(sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]))
+		else:
+			raise Exception()
+	except KeyboardInterrupt: # client silent leave via ctrl + c 
+		sys.exit()
+	except Exception: # all built-in non-system-exit, all user-defined exceptions
+		print(">>> invalid command line arguments")
+		sys.exit()
 	
