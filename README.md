@@ -534,15 +534,15 @@ Alice (port 2000):
 Alice (port 3000):
 \>\>\> Registration request rejected - name Alice used
 
-#### Test-case 9: (?)
+#### Test-case 9: 
 
 1. start server
 2. start client x
 3. start client y
-4. server exit
-5. dereg x
-6. chat x -> y
-7. chat y -> x
+4. start client z
+5. server exit
+6. dereg x
+7. chat y -> z
 
 Start 9:
 python3 ChatApp.py -s 1024
@@ -554,8 +554,25 @@ server: ctrl + c
 
 Output 9:
 Alice:
+\>\>\> Welcome, You are registered.
+\>\>\> Client table updated.
+\>\>\> Client table updated.
+\>\>\> Client table updated.
+\>\>\> dereg Alice
+\>\>\> Server not responding
+\>\>\> Exiting
 
 Bob:
+\>\>\> Welcome, You are registered.
+\>\>\> Client table updated.
+\>\>\> Client table updated.
+\>\>\> send Carol Hello
+\>\>\> Message received by Carol.
+
+Carol:
+\>\>\> Welcome, You are registered.
+\>\>\> Client table updated.
+\>\>\> Bob: Hello
 
 #### Test-case 10:
 
@@ -618,3 +635,44 @@ Alice:
 \>\>\> No ACK from Bob, message sent to server.
 \>\>\> Client table updated.
 \>\>\> Messages received by the server and saved
+
+Bob:
+\>\>\> Welcome, You are registered.
+\>\>\> Client table updated.
+
+#### Test-case 12:
+
+1. start server
+2. start client x
+3. start client y
+4. start client z
+5. client x exits (via silent leave)
+6. chat y -> z
+
+Start 12:
+python3 ChatApp.py -s 1024
+python3 ChatApp.py -c Alice 127.0.0.1 1024 2000
+python3 ChatApp.py -c Bob 127.0.0.1 1024 3000
+python3 ChatApp.py -c Carol 127.0.0.1 1024 4000
+
+Exit 12:
+client x: close SSH window
+
+Output 12:
+Alice:
+\>\>\> Welcome, You are registered.
+\>\>\> Client table updated.
+\>\>\> Client table updated.
+\>\>\> Client table updated.
+
+Bob:
+\>\>\> Welcome, You are registered.
+\>\>\> Client table updated.
+\>\>\> Client table updated.
+\>\>\> send Carol Hello
+\>\>\> Message received by Carol.
+
+Carol:
+\>\>\> Welcome, You are registered.
+\>\>\> Client table updated.
+\>\>\> Bob: Hello
